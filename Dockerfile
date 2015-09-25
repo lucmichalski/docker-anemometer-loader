@@ -5,6 +5,7 @@ RUN apt-get update && \
     libdbi-perl \
     libmysqlclient18 \
     libdbd-mysql-perl \
+    openssh-client \
     wget
 
 WORKDIR /tmp
@@ -17,6 +18,9 @@ COPY conf/anem_mysql.cnf anem_mysql.cnf
 
 # my.cnf for the source mysql instance for the slow query log
 COPY conf/db_host.cnf db_host.cnf
+
+# 
+COPY conf/id_rsa id_rsa
 
 # temporary for testing
 #COPY conf/tmp_slow_log tmp_slow_log

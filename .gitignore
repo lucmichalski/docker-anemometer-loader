@@ -1,3 +1,4 @@
 conf/tmp_slow_log
 conf/db_host.cnf
 conf/anem_mysql.cnf
+conf/id_rsa

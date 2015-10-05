@@ -21,36 +21,57 @@
 #
 #
 
-# Not runtime configurable
+#
+# vars not configurable through commandline args
+#
 digest='/usr/local/bin/pt-query-digest'
 
-# Configured to include $defaults_file
-mysqlopts=
+#
+# vars for anemometer system; configurable with sane defaults
+#
+history_db_host=anemometer-mysql
+history_db_port=3306
+history_db_name='slow_query_log'
+history_defaults_file=/tmp/anem_mysql.cnf
 
-# configurable
-socket=
-defaults_file=db_host.cnf               # must match the filename in conf/
+# The location on the db server and locally where we write the temp file
+temp_slow_log_file=/tmp/tmp_slow_log
+
+# controls for how long and how much of the slow queries we log
 interval=30
 rate=
-history_db_host=anemometer-mysql        # must match the mysql host or the docker link
-history_db_port=3306
-history_db_name='slow_query_log'        # not advised to alter this
-history_defaults_file=/tmp/anem_mysql.cnf    # must match the filename in conf/
-ssh_user=mysqlwatcher
-identity_file=/tmp/id_rsa
-temp_slow_log_file=/tmp/tmp_slow_log         # The location on the db server and locally where we write the temp file
+
+#
+# vars for target MySQL system; must be configured through command line args
+#
+defaults_file=               # e.g. db_host.cnf
+port=                        # e.g. 3306 -- could also be in defaults_file
+msyql_host=                  # e.g. srv-110-34.720.rdio -- could also be in defaults_file
+
+# system user that can ssh into the mysql_host
+ssh_user=                    # e.g. mysqlwatcher
+identity_file=               # e.g. id_rsa
+
+#
+# vars set internally in this script
+#
+
+# options when talking to target MySQL server
+mysqlopts=
 
 help () {
 	cat <<EOF
 
-Usage: $0 --interval <seconds>
+Usage: $0 --defaults-file <filename> --ssh-user <username> --identity-file <filename>
+
+Required Options:
+    --defaults-file -f       The defaults file to use for the client
+    --ssh-user -u            username to ssh to the mysql box for copying the slow log out
+    --identity-file -s       The keypair file that the user has auth'd for ssh access
 
 Options:
-    --socket -S              The mysql socket to use
-    --defaults-file -f       The defaults file to use for the client
     --interval -i            The collection duration
     --rate -r                Set log_slow_rate_limit (For Percona MySQL Only)
-    --user -u                username to ssh to the mysql box for copying the slow log out
     --temp-log-file -t       The location on the db server, and locally, where we will write the temp log file
 
     --history-db-host        Hostname of anemometer database server
@@ -63,12 +84,24 @@ EOF
 while test $# -gt 0
 do
     case $1 in
-        --socket|-S)
-            socket=$2
-            shift
-            ;;
         --defaults-file|-f)
             defaults_file=$2
+            shift
+            ;;
+	      --ssh-user|-u)
+	          ssh_user=$2
+	          shift
+	          ;;
+        --identity-file|-s)
+            identity_file=$2
+            shift
+            ;;
+        --port|-p)
+            port=$2
+            shift
+            ;;
+        --mysql-host|-h)
+            mysql_host=$2
             shift
             ;;
         --interval|-i)
@@ -79,21 +112,9 @@ do
 	          rate=$2
 	          shift
 	          ;;
-	      --pt-query-digest|-d)
-	          digest=$2
-	          shift
-	          ;;
-	      --user|-u)
-	          ssh_user=$2
-	          shift
-	          ;;
 	      --temp-log-file|-t)
 	          temp_slow_log_file=$2
 	          shift
-	          ;;
-	      --help)
-	          help
-	          exit 0
 	          ;;
 	      --history-db-host)
 	          history_db_host=$2
@@ -110,6 +131,10 @@ do
 	      --history-defaults-file)
 	          history_defaults_file=$2
 	          shift
+	          ;;
+	      --help)
+	          help
+	          exit 0
 	          ;;
         *)
             echo >&2 "Invalid argument: $1"
@@ -133,7 +158,17 @@ then
 	mysqlopts="--defaults-file=${defaults_file}"
 fi
 
-echo "Configured mysqlopts: ${mysqlopts}."
+if [ ! -z "${mysql_host}" ];
+then
+	mysqlopts="${mysqlopts} --host=${mysql_host}"
+fi
+
+if [ ! -z "${port}" ];
+then
+	mysqlopts="${mysqlopts} --port=${port}"
+fi
+
+echo "Configured mysqlopts: ${mysqlopts}"
 
 # apply the settings for the slow log querying
 if [ ! -z "${rate}" ];
@@ -189,11 +224,15 @@ mysql ${mysqlopts} -e "SET @@global.slow_query_log_file='${slow_query_log_file_o
 echo "Done re-setting to old values of slow query log settings."
 
 # copy the log to a tmp location
-query_db_host=`cat ${defaults_file} | awk '/host/ {print}' | sed s/host=//`
+# check that we have a host defined
+if [ -z "${mysql_host}" ];
+then
+  mysql_host=`cat ${defaults_file} | awk '/host/ {print}' | sed s/host=//`
+fi
 
-echo "Copying remote log file from: ${ssh_user}@${query_db_host}:${temp_slow_log_file} to: ${history_db_host}:${history_db_port}/${history_db_name}"
+echo "Copying remote log file from: ${ssh_user}@${mysql_host}:${temp_slow_log_file} to: ${history_db_host}:${history_db_port}/${history_db_name}"
 
-scp -o "StrictHostKeyChecking no" -i "$identity_file" "$ssh_user@$query_db_host:${temp_slow_log_file}" ${temp_slow_log_file}
+scp -o "StrictHostKeyChecking no" -i "$identity_file" "$ssh_user@$mysql_host:${temp_slow_log_file}" ${temp_slow_log_file}
 if [[ ! -e "${temp_slow_log_file}" ]]
 then
 	echo "No slow log to process";
@@ -217,12 +256,12 @@ echo "Processing log."
   --review h="${history_db_host}",D="${history_db_name}",t=global_query_review \
   --history h="${history_db_host}",D="${history_db_name}",t=global_query_review_history \
   --no-report --limit=0\% \
-  --filter="\$event->{Bytes} = length(\$event->{arg}) and \$event->{hostname} = \"${query_db_host}\" " \
+  --filter="\$event->{Bytes} = length(\$event->{arg}) and \$event->{hostname} = \"${mysql_host}\" " \
   "/tmp/tmp_slow_log"
 
 echo "Completed processing the slow query log file; clearing the remote temp file."
 
 # clear the tmp slow log
-ssh -i ${identity_file} ${ssh_user}@${query_db_host} "cat /dev/null > /tmp/tmp_slow_log"
+ssh -i ${identity_file} ${ssh_user}@${mysql_host} "cat /dev/null > /tmp/tmp_slow_log"
 
 echo "Done. Slow query log file analysis complete."

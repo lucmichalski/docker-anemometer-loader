@@ -16,15 +16,6 @@ COPY conf/anemometer_collect.sh anemometer_collect.sh
 # my.cnf for the anemometer mysql instance
 COPY conf/anem_mysql.cnf anem_mysql.cnf
 
-# my.cnf for the source mysql instance for the slow query log
-COPY conf/db_host.cnf db_host.cnf
-
-# 
-COPY conf/id_rsa id_rsa
-
-# temporary for testing
-#COPY conf/tmp_slow_log tmp_slow_log
-
 # pull down the pt-query-digest tool
 RUN wget -P /usr/local/bin --no-check-certificate percona.com/get/pt-query-digest \
     && chmod +x /usr/local/bin/pt-query-digest
